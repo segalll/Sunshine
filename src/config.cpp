@@ -1309,6 +1309,27 @@ namespace config {
         std::cout << "Warning: Unrecognized configurable option ["sv << var << ']' << std::endl;
       }
     }
+
+    // NVFBC specific settings
+    video.nvfbc.portal_restore_token.reset();
+    video.nvfbc.pipewire_allow_reuse = true;
+    video.nvfbc.pipewire_prefer_last_display = true;
+
+    std::string tmp;
+    string_f(vars, "nvfbc_portal_token", tmp);
+    tmp = trim(tmp);
+    if (!tmp.empty()) {
+      video.nvfbc.portal_restore_token = tmp;
+    }
+
+    bool bool_tmp;
+    bool_tmp = video.nvfbc.pipewire_allow_reuse;
+    bool_f(vars, "nvfbc_pipewire_allow_reuse", bool_tmp);
+    video.nvfbc.pipewire_allow_reuse = bool_tmp;
+
+    bool_tmp = video.nvfbc.pipewire_prefer_last_display;
+    bool_f(vars, "nvfbc_pipewire_prefer_last_display", bool_tmp);
+    video.nvfbc.pipewire_prefer_last_display = bool_tmp;
   }
 
   int parse(int argc, char *argv[]) {
@@ -1461,3 +1482,43 @@ namespace config {
     return 0;
   }
 }  // namespace config
+
+namespace config::video::nvfbc {
+  namespace {
+    constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
+
+    void set_token_internal(const std::string &value) {
+      if (value.empty()) {
+        config::video.nvfbc.portal_restore_token.reset();
+      } else {
+        config::video.nvfbc.portal_restore_token = value;
+      }
+      config::modified_config_settings[std::string {kTokenKey}] = value;
+    }
+  }
+
+  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle) {
+    if (!config::video.nvfbc.pipewire_allow_reuse) {
+      return;
+    }
+
+    NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+    if (cuda::nvfbc::func.nvFBCGetStatus(session_handle, &params) || params.portalRestoreToken[0] == '\0') {
+      return;
+    }
+
+    set_token_internal(params.portalRestoreToken);
+  }
+
+  void clear_portal_restore_token() {
+    if (!config::video.nvfbc.pipewire_allow_reuse) {
+      return;
+    }
+
+    if (!config::video.nvfbc.portal_restore_token || config::video.nvfbc.portal_restore_token->empty()) {
+      return;
+    }
+
+    set_token_internal("");
+  }
+}  // namespace config::video::nvfbc

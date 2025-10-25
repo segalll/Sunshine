@@ -15,6 +15,15 @@
 // local includes
 #include "nvenc/nvenc_config.h"
 
+namespace cuda::nvfbc {
+  extern NVFBC_API_FUNCTION_LIST func;
+}
+
+namespace config::video::nvfbc {
+  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle);
+  void clear_portal_restore_token();
+}
+
 namespace config {
   // track modified config options
   inline std::unordered_map<std::string, std::string> modified_config_settings;
@@ -142,6 +151,12 @@ namespace config {
 
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
+
+    struct {
+      std::optional<std::string> portal_restore_token;
+      bool pipewire_allow_reuse;
+      bool pipewire_prefer_last_display;
+    } nvfbc;
   };
 
   struct audio_t {

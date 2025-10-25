@@ -582,19 +582,34 @@ namespace cuda {
 
       handle_t(handle_t &&other):
           handle_flags {other.handle_flags},
-          handle {other.handle} {
+          handle {other.handle},
+          backend {other.backend} {
         other.handle_flags.reset();
+        other.backend = NVFBC_BACKEND_AUTO;
       }
 
       handle_t &operator=(handle_t &&other) {
         std::swap(handle_flags, other.handle_flags);
         std::swap(handle, other.handle);
+        std::swap(backend, other.backend);
 
         return *this;
       }
 
       static std::optional<handle_t> make() {
         NVFBC_CREATE_HANDLE_PARAMS params {NVFBC_CREATE_HANDLE_PARAMS_VER};
+
+        if (config::video.nvfbc.pipewire_allow_reuse) {
+          if (auto token = config::video.nvfbc.portal_restore_token;
+              token && !token->empty()) {
+            std::snprintf(
+              params.portalRestoreToken,
+              NVFBC_PORTAL_RESTORE_TOKEN_LEN,
+              "%s",
+              token->c_str()
+            );
+          }
+        }
 
         // Set privateData to allow NvFBC on consumer NVIDIA GPUs.
         // Based on https://github.com/keylase/nvidia-patch/blob/3193b4b1cea91527bf09ea9b8db5aade6a3f3c0a/win/nvfbcwrp/nvfbcwrp_main.cpp#L23-L25 .
@@ -607,10 +622,19 @@ namespace cuda {
         if (status) {
           BOOST_LOG(error) << "Failed to create session: "sv << handle.last_error();
 
+          if (config::video.nvfbc.pipewire_allow_reuse) {
+            config::video::nvfbc::clear_portal_restore_token();
+          }
+
           return std::nullopt;
         }
 
         handle.handle_flags[SESSION_HANDLE] = true;
+        handle.backend = params.eBackend;
+
+        if (config::video.nvfbc.pipewire_allow_reuse && handle.backend == NVFBC_BACKEND_PIPEWIRE) {
+          config::video::nvfbc::save_portal_restore_token(handle.handle);
+        }
 
         return handle;
       }
@@ -696,6 +720,7 @@ namespace cuda {
       std::bitset<MAX_FLAGS> handle_flags;
 
       NVFBC_SESSION_HANDLE handle;
+      NVFBC_BACKEND backend {NVFBC_BACKEND_AUTO};
     };
 
     class display_t: public platf::display_t {
@@ -707,24 +732,31 @@ namespace cuda {
         }
 
         ctx_t ctx {handle->handle};
+        const bool pipewire_backend = handle->backend == NVFBC_BACKEND_PIPEWIRE;
 
-        auto status_params = handle->status();
-        if (!status_params) {
-          return -1;
+        NVFBC_GET_STATUS_PARAMS status_params {};
+        if (!pipewire_backend) {
+          if (auto status = handle->status()) {
+            status_params = *status;
+          } else {
+            return -1;
+          }
         }
 
         int streamedMonitor = -1;
-        if (!display_name.empty()) {
-          if (status_params->bXRandRAvailable) {
-            auto monitor_nr = util::from_view(display_name);
+        if (!pipewire_backend) {
+          if (!display_name.empty()) {
+            if (status_params.bXRandRAvailable) {
+              auto monitor_nr = util::from_view(display_name);
 
-            if (monitor_nr < 0 || monitor_nr >= status_params->dwOutputNum) {
-              BOOST_LOG(warning) << "Can't stream monitor ["sv << monitor_nr << "], it needs to be between [0] and ["sv << status_params->dwOutputNum - 1 << "], defaulting to virtual desktop"sv;
+              if (monitor_nr < 0 || monitor_nr >= status_params.dwOutputNum) {
+                BOOST_LOG(warning) << "Can't stream monitor ["sv << monitor_nr << "], it needs to be between [0] and ["sv << status_params->dwOutputNum - 1 << "], defaulting to virtual desktop"sv;
+              } else {
+                streamedMonitor = monitor_nr;
+              }
             } else {
-              streamedMonitor = monitor_nr;
+              BOOST_LOG(warning) << "XrandR not available, streaming entire virtual desktop"sv;
             }
-          } else {
-            BOOST_LOG(warning) << "XrandR not available, streaming entire virtual desktop"sv;
           }
         }
 
@@ -737,27 +769,62 @@ namespace cuda {
 
         capture_params.dwSamplingRateMs = 1000 /* ms */ / config.framerate;
 
-        if (streamedMonitor != -1) {
-          auto &output = status_params->outputs[streamedMonitor];
-
-          width = output.trackedBox.w;
-          height = output.trackedBox.h;
-          offset_x = output.trackedBox.x;
-          offset_y = output.trackedBox.y;
-
-          capture_params.eTrackingType = NVFBC_TRACKING_OUTPUT;
-          capture_params.dwOutputId = output.dwId;
-        } else {
+        if (pipewire_backend) {
+          // PipeWire backend: XRandR is not available. Use requested stream size when configured.
           capture_params.eTrackingType = NVFBC_TRACKING_SCREEN;
 
-          width = status_params->screenSize.w;
-          height = status_params->screenSize.h;
+          if (config::video.nvfbc.pipewire_prefer_last_display) {
+            width = config.width;
+            height = config.height;
+          } else {
+            width = 0;
+            height = 0;
+          }
+
+          offset_x = 0;
+          offset_y = 0;
+
+          // PipeWire limitations: no push model and direct capture has no effect
+          capture_params.bPushModel = nv_bool(false);
+          capture_params.bAllowDirectCapture = nv_bool(false);
+        } else {
+          if (streamedMonitor != -1) {
+            auto &output = status_params.outputs[streamedMonitor];
+
+            width = output.trackedBox.w;
+            height = output.trackedBox.h;
+            offset_x = output.trackedBox.x;
+            offset_y = output.trackedBox.y;
+
+            capture_params.eTrackingType = NVFBC_TRACKING_OUTPUT;
+            capture_params.dwOutputId = output.dwId;
+          } else {
+            capture_params.eTrackingType = NVFBC_TRACKING_SCREEN;
+
+            width = status_params.screenSize.w;
+            height = status_params.screenSize.h;
+          }
         }
 
-        env_width = status_params->screenSize.w;
-        env_height = status_params->screenSize.h;
+        // Request the configured capture resolution; NvFBC may round as needed
+        if (width > 0 && height > 0) {
+          capture_params.frameSize = NVFBC_SIZE { (uint32_t) width, (uint32_t) height };
+        } else {
+          capture_params.frameSize = NVFBC_SIZE {};
+        }
+
+        if (!pipewire_backend) {
+          env_width = status_params.screenSize.w;
+          env_height = status_params.screenSize.h;
+        } else {
+          env_width = (width > 0 ? width : env_width);
+          env_height = (height > 0 ? height : env_height);
+        }
 
         this->handle = std::move(*handle);
+        if (config::video.nvfbc.pipewire_allow_reuse && this->handle.backend == NVFBC_BACKEND_PIPEWIRE) {
+          config::video::nvfbc::save_portal_restore_token(this->handle.handle);
+        }
         return 0;
       }
 
@@ -827,14 +894,22 @@ namespace cuda {
         }
 
         cursor_visible = cursor;
-        if (cursor) {
+        const bool pipewire_backend = handle.backend == NVFBC_BACKEND_PIPEWIRE;
+        if (pipewire_backend) {
+          // PipeWire backend: push model unsupported, direct capture has no effect
           capture_params.bPushModel = nv_bool(false);
-          capture_params.bWithCursor = nv_bool(true);
+          capture_params.bWithCursor = nv_bool(cursor);
           capture_params.bAllowDirectCapture = nv_bool(false);
         } else {
-          capture_params.bPushModel = nv_bool(true);
-          capture_params.bWithCursor = nv_bool(false);
-          capture_params.bAllowDirectCapture = nv_bool(true);
+          if (cursor) {
+            capture_params.bPushModel = nv_bool(false);
+            capture_params.bWithCursor = nv_bool(true);
+            capture_params.bAllowDirectCapture = nv_bool(false);
+          } else {
+            capture_params.bPushModel = nv_bool(true);
+            capture_params.bWithCursor = nv_bool(false);
+            capture_params.bAllowDirectCapture = nv_bool(true);
+          }
         }
 
         if (handle.capture(capture_params)) {
@@ -858,6 +933,9 @@ namespace cuda {
           for (int x = 0; x < 3; ++x) {
             if (auto status = func.nvFBCToCudaGrabFrame(handle.handle, &grab)) {
               if (status == NVFBC_ERR_MUST_RECREATE) {
+                if (handle.backend == NVFBC_BACKEND_PIPEWIRE) {
+                  config::video::nvfbc::clear_portal_restore_token();
+                }
                 return platf::capture_e::reinit;
               }
 
@@ -910,6 +988,9 @@ namespace cuda {
 
         if (auto status = func.nvFBCToCudaGrabFrame(handle.handle, &grab)) {
           if (status == NVFBC_ERR_MUST_RECREATE) {
+            if (handle.backend == NVFBC_BACKEND_PIPEWIRE) {
+              config::video::nvfbc::clear_portal_restore_token();
+            }
             return platf::capture_e::reinit;
           }
 
@@ -926,10 +1007,34 @@ namespace cuda {
           return platf::capture_e::error;
         }
 
+        if (handle.backend == NVFBC_BACKEND_PIPEWIRE && (width == 0 || height == 0)) {
+          width = info.dwWidth;
+          height = info.dwHeight;
+          env_width = info.dwWidth;
+          env_height = info.dwHeight;
+        }
+
         return platf::capture_e::ok;
       }
 
       std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
+        if (handle.backend == NVFBC_BACKEND_PIPEWIRE) {
+          if (width == 0 || height == 0) {
+            NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+            if (!func.nvFBCGetStatus(handle.handle, &params)) {
+              if (params.screenSize.w > 0 && params.screenSize.h > 0) {
+                width = params.screenSize.w;
+                height = params.screenSize.h;
+              }
+            }
+            if (width == 0 || height == 0) {
+              width = env_width > 0 ? env_width : 1920;
+              height = env_height > 0 ? env_height : 1080;
+            }
+          }
+
+          config::video::nvfbc::save_portal_restore_token(handle.handle);
+        }
         return ::cuda::make_avcodec_encode_device(width, height, true);
       }
 
@@ -966,6 +1071,30 @@ namespace cuda {
   }  // namespace nvfbc
 }  // namespace cuda
 
+namespace config::video::nvfbc {
+  namespace {
+    constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
+  }
+
+  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle) {
+    NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+
+    if (cuda::nvfbc::func.nvFBCGetStatus(session_handle, &params) || params.portalRestoreToken[0] == '\0') {
+      return;
+    }
+
+    config::video.nvfbc.portal_restore_token = params.portalRestoreToken;
+    config::modified_config_settings.emplace(std::string{kTokenKey}, params.portalRestoreToken);
+  }
+
+  void clear_portal_restore_token() {
+    if (config::video.nvfbc.portal_restore_token && !config::video.nvfbc.portal_restore_token->empty()) {
+      config::video.nvfbc.portal_restore_token.reset();
+      config::modified_config_settings.emplace(std::string{kTokenKey}, "");
+    }
+  }
+}  // namespace config::video::nvfbc
+
 namespace platf {
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
     if (hwdevice_type != mem_type_e::cuda) {
@@ -987,12 +1116,17 @@ namespace platf {
       return {};
     }
 
-    std::vector<std::string> display_names;
-
     auto handle = cuda::nvfbc::handle_t::make();
     if (!handle) {
       return {};
     }
+
+    if (handle->backend == NVFBC_BACKEND_PIPEWIRE) {
+      // The PipeWire backend does not enumerate outputs via NvFBCGetStatus
+      return {};
+    }
+
+    std::vector<std::string> display_names;
 
     auto status_params = handle->status();
     if (!status_params) {
