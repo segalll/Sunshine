@@ -623,7 +623,7 @@ namespace cuda {
           BOOST_LOG(error) << "Failed to create session: "sv << handle.last_error();
 
           if (config::video.nvfbc.pipewire_allow_reuse) {
-            config::video::nvfbc::clear_portal_restore_token();
+            config::nvfbc::clear_portal_restore_token();
           }
 
           return std::nullopt;
@@ -633,7 +633,10 @@ namespace cuda {
         handle.backend = params.eBackend;
 
         if (config::video.nvfbc.pipewire_allow_reuse && handle.backend == NVFBC_BACKEND_PIPEWIRE) {
-          config::video::nvfbc::save_portal_restore_token(handle.handle);
+          NVFBC_GET_STATUS_PARAMS status_params {NVFBC_GET_STATUS_PARAMS_VER};
+          if (!func.nvFBCGetStatus(handle.handle, &status_params) && status_params.portalRestoreToken[0] != '\0') {
+            config::nvfbc::save_portal_restore_token(status_params.portalRestoreToken);
+          }
         }
 
         return handle;
@@ -817,13 +820,16 @@ namespace cuda {
           env_width = status_params.screenSize.w;
           env_height = status_params.screenSize.h;
         } else {
-          env_width = (width > 0 ? width : env_width);
-          env_height = (height > 0 ? height : env_height);
+          env_width = width > 0 ? width : config.width;
+          env_height = height > 0 ? height : config.height;
         }
 
         this->handle = std::move(*handle);
         if (config::video.nvfbc.pipewire_allow_reuse && this->handle.backend == NVFBC_BACKEND_PIPEWIRE) {
-          config::video::nvfbc::save_portal_restore_token(this->handle.handle);
+          NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+          if (!func.nvFBCGetStatus(this->handle.handle, &params) && params.portalRestoreToken[0] != '\0') {
+            config::nvfbc::save_portal_restore_token(params.portalRestoreToken);
+          }
         }
         return 0;
       }
@@ -934,7 +940,7 @@ namespace cuda {
             if (auto status = func.nvFBCToCudaGrabFrame(handle.handle, &grab)) {
               if (status == NVFBC_ERR_MUST_RECREATE) {
                 if (handle.backend == NVFBC_BACKEND_PIPEWIRE) {
-                  config::video::nvfbc::clear_portal_restore_token();
+                  config::nvfbc::clear_portal_restore_token();
                 }
                 return platf::capture_e::reinit;
               }
@@ -989,7 +995,7 @@ namespace cuda {
         if (auto status = func.nvFBCToCudaGrabFrame(handle.handle, &grab)) {
           if (status == NVFBC_ERR_MUST_RECREATE) {
             if (handle.backend == NVFBC_BACKEND_PIPEWIRE) {
-              config::video::nvfbc::clear_portal_restore_token();
+              config::nvfbc::clear_portal_restore_token();
             }
             return platf::capture_e::reinit;
           }
@@ -1026,6 +1032,9 @@ namespace cuda {
                 width = params.screenSize.w;
                 height = params.screenSize.h;
               }
+              if (params.portalRestoreToken[0] != '\0') {
+                config::nvfbc::save_portal_restore_token(params.portalRestoreToken);
+              }
             }
             if (width == 0 || height == 0) {
               width = env_width > 0 ? env_width : 1920;
@@ -1033,7 +1042,10 @@ namespace cuda {
             }
           }
 
-          config::video::nvfbc::save_portal_restore_token(handle.handle);
+          NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+          if (!func.nvFBCGetStatus(handle.handle, &params) && params.portalRestoreToken[0] != '\0') {
+            config::nvfbc::save_portal_restore_token(params.portalRestoreToken);
+          }
         }
         return ::cuda::make_avcodec_encode_device(width, height, true);
       }
@@ -1071,7 +1083,7 @@ namespace cuda {
   }  // namespace nvfbc
 }  // namespace cuda
 
-namespace config::video::nvfbc {
+namespace config::nvfbc {
   namespace {
     constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
   }
@@ -1093,7 +1105,7 @@ namespace config::video::nvfbc {
       config::modified_config_settings.emplace(std::string{kTokenKey}, "");
     }
   }
-}  // namespace config::video::nvfbc
+}  // namespace config::nvfbc
 
 namespace platf {
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {

@@ -1483,31 +1483,31 @@ namespace config {
   }
 }  // namespace config
 
-namespace config::video::nvfbc {
+namespace config::nvfbc {
   namespace {
     constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
 
-    void set_token_internal(const std::string &value) {
-      if (value.empty()) {
+    void set_token_internal(std::string_view value) {
+      std::string token {trim(value)};
+      if (token.empty()) {
         config::video.nvfbc.portal_restore_token.reset();
       } else {
-        config::video.nvfbc.portal_restore_token = value;
+        config::video.nvfbc.portal_restore_token = token;
       }
-      config::modified_config_settings[std::string {kTokenKey}] = value;
+      config::modified_config_settings[std::string {kTokenKey}] = token;
     }
   }
 
-  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle) {
+  void save_portal_restore_token(std::string_view token) {
     if (!config::video.nvfbc.pipewire_allow_reuse) {
       return;
     }
 
-    NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
-    if (cuda::nvfbc::func.nvFBCGetStatus(session_handle, &params) || params.portalRestoreToken[0] == '\0') {
+    if (token.empty()) {
       return;
     }
 
-    set_token_internal(params.portalRestoreToken);
+    set_token_internal(token);
   }
 
   void clear_portal_restore_token() {
@@ -1519,6 +1519,6 @@ namespace config::video::nvfbc {
       return;
     }
 
-    set_token_internal("");
+    set_token_internal({});
   }
-}  // namespace config::video::nvfbc
+}  // namespace config::nvfbc

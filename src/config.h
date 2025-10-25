@@ -9,6 +9,7 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -19,8 +20,8 @@ namespace cuda::nvfbc {
   extern NVFBC_API_FUNCTION_LIST func;
 }
 
-namespace config::video::nvfbc {
-  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle);
+namespace config::nvfbc {
+  void save_portal_restore_token(std::string_view token);
   void clear_portal_restore_token();
 }
 
