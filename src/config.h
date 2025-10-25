@@ -16,10 +16,6 @@
 // local includes
 #include "nvenc/nvenc_config.h"
 
-namespace cuda::nvfbc {
-  extern NVFBC_API_FUNCTION_LIST func;
-}
-
 namespace config::nvfbc {
   void save_portal_restore_token(std::string_view token);
   void clear_portal_restore_token();
