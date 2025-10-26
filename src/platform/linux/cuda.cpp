@@ -1083,29 +1083,17 @@ namespace cuda {
   }  // namespace nvfbc
 }  // namespace cuda
 
-namespace config::nvfbc {
-  namespace {
-    constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
-  }
-
-  void save_portal_restore_token(NVFBC_SESSION_HANDLE session_handle) {
+namespace {
+  void save_portal_restore_token_from_session(NVFBC_SESSION_HANDLE session_handle) {
     NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
 
     if (cuda::nvfbc::func.nvFBCGetStatus(session_handle, &params) || params.portalRestoreToken[0] == '\0') {
       return;
     }
 
-    config::video.nvfbc.portal_restore_token = params.portalRestoreToken;
-    config::modified_config_settings.emplace(std::string{kTokenKey}, params.portalRestoreToken);
+    config::nvfbc::save_portal_restore_token(params.portalRestoreToken);
   }
-
-  void clear_portal_restore_token() {
-    if (config::video.nvfbc.portal_restore_token && !config::video.nvfbc.portal_restore_token->empty()) {
-      config::video.nvfbc.portal_restore_token.reset();
-      config::modified_config_settings.emplace(std::string{kTokenKey}, "");
-    }
-  }
-}  // namespace config::nvfbc
+}  // namespace
 
 namespace platf {
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
