@@ -753,7 +753,7 @@ namespace cuda {
               auto monitor_nr = util::from_view(display_name);
 
               if (monitor_nr < 0 || monitor_nr >= status_params.dwOutputNum) {
-                BOOST_LOG(warning) << "Can't stream monitor ["sv << monitor_nr << "], it needs to be between [0] and ["sv << status_params->dwOutputNum - 1 << "], defaulting to virtual desktop"sv;
+                BOOST_LOG(warning) << "Can't stream monitor ["sv << monitor_nr << "], it needs to be between [0] and ["sv << status_params.dwOutputNum - 1 << "], defaulting to virtual desktop"sv;
               } else {
                 streamedMonitor = monitor_nr;
               }
