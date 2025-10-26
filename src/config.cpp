@@ -1317,7 +1317,7 @@ namespace config {
 
     std::string tmp;
     string_f(vars, "nvfbc_portal_token", tmp);
-    tmp = trim(tmp);
+    tmp = boost::property_tree::detail::trim(tmp);
     if (!tmp.empty()) {
       video.nvfbc.portal_restore_token = tmp;
     }
@@ -1488,7 +1488,8 @@ namespace config::nvfbc {
     constexpr std::string_view kTokenKey {"nvfbc_portal_token"};
 
     void set_token_internal(std::string_view value) {
-      std::string token {trim(value)};
+      std::string token {value};
+      token = boost::property_tree::detail::trim(token);
       if (token.empty()) {
         config::video.nvfbc.portal_restore_token.reset();
       } else {
