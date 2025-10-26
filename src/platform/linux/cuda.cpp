@@ -1083,18 +1083,6 @@ namespace cuda {
   }  // namespace nvfbc
 }  // namespace cuda
 
-namespace {
-  void save_portal_restore_token_from_session(NVFBC_SESSION_HANDLE session_handle) {
-    NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
-
-    if (cuda::nvfbc::func.nvFBCGetStatus(session_handle, &params) || params.portalRestoreToken[0] == '\0') {
-      return;
-    }
-
-    config::nvfbc::save_portal_restore_token(params.portalRestoreToken);
-  }
-}  // namespace
-
 namespace platf {
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
     if (hwdevice_type != mem_type_e::cuda) {
