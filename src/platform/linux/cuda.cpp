@@ -774,7 +774,7 @@ namespace cuda {
 
         if (pipewire_backend) {
           // PipeWire backend: XRandR is not available. Use requested stream size when configured.
-          capture_params.eTrackingType = NVFBC_TRACKING_SCREEN;
+          capture_params.eTrackingType = NVFBC_TRACKING_DEFAULT;
 
           if (config::video.nvfbc.pipewire_prefer_last_display) {
             width = config.width;
@@ -1111,7 +1111,7 @@ namespace platf {
 
     if (handle->backend == NVFBC_BACKEND_PIPEWIRE) {
       // The PipeWire backend does not enumerate outputs via NvFBCGetStatus
-      return {};
+      return {"SCREEN0"};
     }
 
     std::vector<std::string> display_names;

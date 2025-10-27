@@ -443,10 +443,6 @@ function run_step_deps() {
   # Install the dependencies
   $package_install_command "${dependencies[@]}"
 
-  # reload the environment
-  # shellcheck source=/dev/null
-  source ~/.bashrc
-
   #set gcc version based on distros
   export CC=gcc-${gcc_version}
   export CXX=g++-${gcc_version}
